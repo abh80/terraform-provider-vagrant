@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 
 	"context"
+	"io/fs"
 	"io/ioutil"
 	"log"
 	"path/filepath"
@@ -120,6 +122,11 @@ func resourceVagrantVM() *schema.Resource {
 					},
 				},
 			},
+			"identifier": {
+				Description: "The identifier for the vagrant resource. This is a combination of the vagrantfile_dir and the machine_names.",
+				Type:        schema.TypeString,
+				Optional:    false,
+			},
 
 			"ports": {
 				Description: "Forwarded ports per machine. Only set if `get_ports` is true.",
@@ -148,10 +155,44 @@ func resourceVagrantVM() *schema.Resource {
 	}
 }
 
-func resourceVagrantVMCreate(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	ctx, cancelFunc := contextWithTimeout(ctx, d.Timeout(schema.TimeoutCreate))
-	defer cancelFunc()
+func loadVagrantFileDir(d *schema.ResourceData, should_create bool) error {
+	homedir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	home_vagrantfiledir := filepath.Join(homedir, ".terraform-vagrant-provider", d.Get("identifier").(string))
+	_, err = os.Stat(home_vagrantfiledir)
+	if err == nil {
+		d.Set("vagrantfile_dir", home_vagrantfiledir)
+		return nil
+	}
+	if !should_create {
+		return errors.New("vagrantfile_dir not found")
+	}
+	err = os.MkdirAll(home_vagrantfiledir, fs.ModePerm)
+	if err != nil {
+		return err
+	}
+	var vagrantfiledir = d.Get("vagrantfile_dir").(string)
+	vagrantfile := filepath.Join(vagrantfiledir, "Vagrantfile")
+	home_vagrantfile := filepath.Join(home_vagrantfiledir, "Vagrantfile")
+	input, err := os.ReadFile(vagrantfile)
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile(home_vagrantfile, input, fs.ModePerm)
+	if err != nil {
+		return err
+	}
+	d.Set("vagrantfile_dir", home_vagrantfiledir)
+	return nil
+}
 
+func resourceVagrantVMCreate(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+	err := loadVagrantFileDir(d, true)
+	if err != nil {
+		return diag.FromErr(err)
+	}
 	client, err := vagrant.NewVagrantClient(d.Get("vagrantfile_dir").(string))
 	if err != nil {
 		return diag.FromErr(err)
@@ -175,7 +216,10 @@ func resourceVagrantVMCreate(ctx context.Context, d *schema.ResourceData, m inte
 func resourceVagrantVMRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	ctx, cancelFunc := contextWithTimeout(ctx, d.Timeout(schema.TimeoutRead))
 	defer cancelFunc()
-
+	err := loadVagrantFileDir(d , false)
+	if err != nil {
+		return diag.FromErr(err)
+	}
 	client, err := vagrant.NewVagrantClient(d.Get("vagrantfile_dir").(string))
 	if err != nil {
 		return diag.FromErr(err)
@@ -196,6 +240,11 @@ func resourceVagrantVMRead(ctx context.Context, d *schema.ResourceData, m interf
 func resourceVagrantVMUpdate(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	ctx, cancelFunc := contextWithTimeout(ctx, d.Timeout(schema.TimeoutUpdate))
 	defer cancelFunc()
+
+	err := loadVagrantFileDir(d , false)
+	if err != nil {
+		return diag.FromErr(err)
+	}
 
 	client, err := vagrant.NewVagrantClient(d.Get("vagrantfile_dir").(string))
 	if err != nil {
@@ -252,6 +301,11 @@ func resourceVagrantVMUpdate(ctx context.Context, d *schema.ResourceData, m inte
 func resourceVagrantVMDelete(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	ctx, cancelFunc := contextWithTimeout(ctx, d.Timeout(schema.TimeoutDelete))
 	defer cancelFunc()
+
+	err := loadVagrantFileDir(d , false)
+	if err != nil {
+		return diag.FromErr(err)
+	}
 
 	client, err := vagrant.NewVagrantClient(d.Get("vagrantfile_dir").(string))
 	if err != nil {

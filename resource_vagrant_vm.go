@@ -125,7 +125,7 @@ func resourceVagrantVM() *schema.Resource {
 			"identifier": {
 				Description: "The identifier for the vagrant resource. This is a combination of the vagrantfile_dir and the machine_names.",
 				Type:        schema.TypeString,
-				Optional:    false,
+				Required:   true,
 			},
 
 			"ports": {
